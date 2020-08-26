@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +63,109 @@ func (l *csl) Set(v string) error {
 }
 
 func (l csl) String() string { return strings.Join(l, ",") }
+
+type paceFlag struct {
+	infinity bool
+
+	constant *vegeta.ConstantPacer
+
+	sine *vegeta.SinePacer
+}
+
+var (
+	paceInfinityRegexp   = regexp.MustCompile(`^infinity$`)
+	paceConstantRegexp   = regexp.MustCompile(`^([0-9]+)/([^/]*)$`)
+	paceSinusoidalRegexp = regexp.MustCompile(`^([0-9]*)-([0-9]*)/([^/]*)@(.*)$`)
+)
+
+func (f *paceFlag) Set(v string) (err error) {
+	if m := paceInfinityRegexp.FindStringSubmatch(v); len(m) == 1 {
+		f.infinity = true
+		return nil
+	}
+
+	if m := paceConstantRegexp.FindStringSubmatch(v); len(m) == 3 {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			return err
+		}
+
+		d, err := time.ParseDuration(m[2])
+		if err != nil {
+			return err
+		}
+
+		f.constant = &vegeta.Rate{Freq: n, Per: d}
+
+		return nil
+	}
+
+	if m := paceSinusoidalRegexp.FindStringSubmatch(v); len(m) == 5 {
+		min, err := strconv.Atoi(m[1])
+		if err != nil {
+			return err
+		}
+
+		max, err := strconv.Atoi(m[2])
+		if err != nil {
+			return err
+		}
+
+		per, err := time.ParseDuration(m[3])
+		if err != nil {
+			return err
+		}
+
+		period, err := time.ParseDuration(m[4])
+		if err != nil {
+			return err
+		}
+
+		amp := int(float64(max-min) / 2)
+
+		f.sine = &vegeta.SinePacer{
+			Mean:   vegeta.ConstantPacer{Freq: amp + min, Per: per},
+			Amp:    vegeta.ConstantPacer{Freq: amp, Per: per},
+			Period: period,
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("unknown pace string")
+}
+
+func (f *paceFlag) String() string {
+	if f.infinity {
+		return "infinity"
+	}
+
+	if f.constant != nil {
+		return fmt.Sprintf("%d/%s", f.constant.Freq, f.constant.Per)
+	}
+
+	if f.sine != nil {
+		return fmt.Sprintf("sinusoidal mean %d/%s, amp %d/%s, period %s", f.sine.Mean.Freq, f.sine.Mean.Per, f.sine.Amp.Freq, f.sine.Amp.Per, f.sine.Period)
+	}
+
+	return ""
+}
+
+func (f *paceFlag) pacer() (vegeta.Pacer, error) {
+	if f.infinity {
+		return &vegeta.ConstantPacer{Freq: 0, Per: 0}, nil
+	}
+
+	if f.constant != nil {
+		return f.constant, nil
+	}
+
+	if f.sine != nil {
+		return f.sine, nil
+	}
+
+	return nil, fmt.Errorf("no valid pacer")
+}
 
 type rateFlag struct{ *vegeta.Rate }
 

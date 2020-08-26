@@ -25,7 +25,7 @@ func attackCmd() command {
 		headers:      headers{http.Header{}},
 		proxyHeaders: headers{http.Header{}},
 		laddr:        localAddr{&vegeta.DefaultLocalAddr},
-		rate:         vegeta.Rate{Freq: 50, Per: time.Second},
+		pace:         paceFlag{},
 		maxBody:      vegeta.DefaultMaxBody,
 	}
 	fs.StringVar(&opts.name, "name", "", "Attack name")
@@ -50,7 +50,7 @@ func attackCmd() command {
 	fs.IntVar(&opts.maxConnections, "max-connections", vegeta.DefaultMaxConnections, "Max connections per target host")
 	fs.IntVar(&opts.redirects, "redirects", vegeta.DefaultRedirects, "Number of redirects to follow. -1 will not follow but marks as success")
 	fs.Var(&maxBodyFlag{&opts.maxBody}, "max-body", "Maximum number of bytes to capture from response bodies. [-1 = no limit]")
-	fs.Var(&rateFlag{&opts.rate}, "rate", "Number of requests per time unit [0 = infinity]")
+	fs.Var(&opts.pace, "pace", "Pace")
 	fs.Var(&opts.headers, "header", "Request header")
 	fs.Var(&opts.proxyHeaders, "proxy-header", "Proxy CONNECT header")
 	fs.Var(&opts.laddr, "laddr", "Local IP address")
@@ -86,7 +86,7 @@ type attackOpts struct {
 	chunked        bool
 	duration       time.Duration
 	timeout        time.Duration
-	rate           vegeta.Rate
+	pace           paceFlag
 	workers        uint64
 	maxWorkers     uint64
 	connections    int
@@ -104,8 +104,8 @@ type attackOpts struct {
 // attack validates the attack arguments, sets up the
 // required resources, launches the attack and writes the results
 func attack(opts *attackOpts) (err error) {
-	if opts.maxWorkers == vegeta.DefaultMaxWorkers && opts.rate.Freq == 0 {
-		return fmt.Errorf("-rate=0 requires setting -max-workers")
+	if opts.pace.infinity && opts.maxWorkers == vegeta.DefaultMaxWorkers {
+		return fmt.Errorf("-pace=infinity requires setting -max-workers")
 	}
 
 	if len(opts.resolvers) > 0 {
@@ -190,7 +190,12 @@ func attack(opts *attackOpts) (err error) {
 		vegeta.ChunkedBody(opts.chunked),
 	)
 
-	res := atk.Attack(tr, opts.rate, opts.duration, opts.name)
+	pacer, err := opts.pace.pacer()
+	if err != nil {
+		return err
+	}
+
+	res := atk.Attack(tr, pacer, opts.duration, opts.name)
 	enc := vegeta.NewEncoder(out)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
